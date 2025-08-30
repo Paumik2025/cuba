@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Calendario 1810–1848</title>
+  <style>
+    :root{
+      --bg:#ffffff; --ink:#111827; --muted:#6b7280; --accent:#2563eb; --line:#e5e7eb;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{margin:0; padding:1.5rem; background:var(--bg); color:var(--ink);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, "Apple Color Emoji","Segoe UI Emoji";}
+    header{display:grid; gap:.75rem; align-items:center; grid-template-columns:1fr; margin-bottom:1rem}
+    .top{
+      display:flex; align-items:center; justify-content:space-between; gap:.75rem; flex-wrap:wrap;
+    }
+    h1{margin:0; font-weight:800; font-size:clamp(1.25rem, 2.5vw, 1.75rem)}
+    .controls{display:flex; gap:.5rem; flex-wrap:wrap}
+    .controls > *{border:1px solid var(--line); background:#fff; color:var(--ink); border-radius:.6rem; height:2.2rem}
+    select, button{padding:.3rem .65rem; font-size:.95rem}
+    .yearbox{display:flex; align-items:center; gap:.5rem}
+    .yearnum{min-width:4.5rem; text-align:center; font-variant-numeric:tabular-nums; font-weight:700}
+    .hint{color:var(--muted); font-size:.9rem}
+
+    .calendar{display:grid; gap:1.25rem; grid-template-columns:repeat(auto-fit, minmax(280px,1fr))}
+    .month{border:1px solid var(--line); border-radius:1rem; padding:1rem; box-shadow:0 1px 2px rgba(0,0,0,.04); break-inside:avoid}
+    .month h2{margin:0 0 .6rem; font-size:1.05rem}
+    .weekdays,.days{display:grid; grid-template-columns:repeat(7,1fr)}
+    .weekdays div{text-align:center; font-weight:700; font-size:.82rem; color:var(--muted); padding:.35rem 0}
+    .days div{border-top:1px solid var(--line); border-left:1px solid var(--line); min-height:44px; padding:.35rem; text-align:right; font-variant-numeric:tabular-nums}
+    .days div:nth-child(7n){border-right:1px solid var(--line)}
+    .days div:nth-last-child(-n+7){border-bottom:1px solid var(--line)}
+    .days .empty{background:linear-gradient(90deg,#fafafa,#fff)}
+
+    footer{margin-top:1rem; color:var(--muted); font-size:.9rem}
+
+    @media print{
+      body{padding:0}
+      header, footer{display:none}
+      .calendar{gap:0; grid-template-columns:1fr}
+      .month{border:none; border-radius:0; box-shadow:none; page-break-inside:avoid; break-after:page}
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="top">
+      <h1>Calendario <span class="hint">(1810–1848)</span></h1>
+      <div class="controls">
+        <button id="firstBtn" title="Ir a 1810">?? 1810</button>
+        <button id="prevBtn" title="Año anterior">??</button>
+        <div class="yearbox">
+          <label for="yearSel" class="hint">Año</label>
+          <select id="yearSel" aria-label="Año"></select>
+          <span class="yearnum" id="yearLabel"></span>
+        </div>
+        <button id="nextBtn" title="Año siguiente">??</button>
+        <button id="lastBtn" title="Ir a 1848">1848 ??</button>
+        <label class="hint">
+          Inicio de semana
+          <select id="startSelect" aria-label="Inicio de semana">
+            <option value="mon" selected>Lunes</option>
+            <option value="sun">Domingo</option>
+          </select>
+        </label>
+        <button id="printBtn" title="Imprimir o guardar como PDF">Imprimir</button>
+      </div>
+    </div>
+    <div class="hint">Usa ??/?? en el teclado para moverte por los años. Enlace directo con <code>#y=1815</code>.</div>
+  </header>
+
+  <main class="calendar" id="calendar" aria-live="polite"></main>
+  <footer>Generado con HTML, CSS y JavaScript. Compatible con impresión (usa <em>Guardar como PDF</em>).</footer>
+
+  <script>
+    (function(){
+      const START_YEAR = 1810;
+      const END_YEAR = 1848;
+      const monthNames = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+      const weekdaysMon = ["L","M","X","J","V","S","D"]; // semana inicia lunes
+      const weekdaysSun = ["D","L","M","X","J","V","S"]; // semana inicia domingo
+
+      const $cal = document.getElementById('calendar');
+      const $yearSel = document.getElementById('yearSel');
+      const $yearLabel = document.getElementById('yearLabel');
+      const $start = document.getElementById('startSelect');
+      const $print = document.getElementById('printBtn');
+      const $prev = document.getElementById('prevBtn');
+      const $next = document.getElementById('nextBtn');
+      const $first = document.getElementById('firstBtn');
+      const $last = document.getElementById('lastBtn');
+
+      // Poblar selector de años
+      for(let y=START_YEAR; y<=END_YEAR; y++){
+        const opt = document.createElement('option');
+        opt.value = y; opt.textContent = y; $yearSel.appendChild(opt);
+      }
+
+      // Preferencia de inicio de semana (persistida)
+      const savedStart = localStorage.getItem('cal.start') || 'mon';
+      $start.value = savedStart;
+
+      // URL hash -> #y=1820
+      function getYearFromHash(){
+        const m = location.hash.match(/y=(\d{3,4})/i); if(!m) return null; return parseInt(m[1],10);
+      }
+      function setHashYear(y){ location.hash = `y=${y}`; }
+
+      function clampYear(y){ return Math.min(END_YEAR, Math.max(START_YEAR, y)); }
+      function daysInMonth(year, month){ return new Date(year, month+1, 0).getDate(); }
+      function firstWeekdayIndex(year, month, startMonday=true){
+        const js = new Date(year, month, 1).getDay();
+        return startMonday ? (js + 6) % 7 : js; // 0..6
+      }
+
+      function render(year){
+        const startMonday = $start.value === 'mon';
+        localStorage.setItem('cal.start', $start.value);
+        $yearSel.value = String(year);
+        $yearLabel.textContent = year;
+        $cal.innerHTML = '';
+
+        const labels = startMonday ? weekdaysMon : weekdaysSun;
+
+        for(let m=0; m<12; m++){
+          const section = document.createElement('section');
+          section.className = 'month';
+          const title = document.createElement('h2');
+          title.textContent = monthNames[m] + ' ' + year;
+          section.appendChild(title);
+
+          const w = document.createElement('div');
+          w.className = 'weekdays';
+          labels.forEach(d => { const c = document.createElement('div'); c.textContent = d; w.appendChild(c); });
+          section.appendChild(w);
+
+          const grid = document.createElement('div');
+          grid.className = 'days';
+
+          const first = firstWeekdayIndex(year, m, startMonday);
+          const total = daysInMonth(year, m);
+
+          for(let i=0;i<first;i++){ const cell=document.createElement('div'); cell.className='empty'; grid.appendChild(cell); }
+          for(let d=1; d<=total; d++){ const cell=document.createElement('div'); cell.textContent=d; grid.appendChild(cell); }
+          const cells = first + total; const rem = cells % 7;
+          if(rem!==0){ for(let i=0;i<7-rem;i++){ const cell=document.createElement('div'); cell.className='empty'; grid.appendChild(cell); } }
+
+          section.appendChild(grid);
+          $cal.appendChild(section);
+        }
+      }
+
+      function gotoYear(y){ y = clampYear(y); setHashYear(y); render(y); }
+
+      // Eventos UI
+      $yearSel.addEventListener('change', () => gotoYear(parseInt($yearSel.value,10)));
+      $start.addEventListener('change', () => render(parseInt($yearSel.value,10)));
+      $print.addEventListener('click', () => window.print());
+      $prev.addEventListener('click', () => gotoYear(parseInt($yearSel.value,10) - 1));
+      $next.addEventListener('click', () => gotoYear(parseInt($yearSel.value,10) + 1));
+      $first.addEventListener('click', () => gotoYear(START_YEAR));
+      $last.addEventListener('click', () => gotoYear(END_YEAR));
+
+      // Navegación por teclado
+      window.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowLeft') { e.preventDefault(); $prev.click(); }
+        if (e.key === 'ArrowRight') { e.preventDefault(); $next.click(); }
+      });
+
+      // Escucha cambios de hash (para compartir enlaces)
+      window.addEventListener('hashchange', () => {
+        const y = clampYear(getYearFromHash() ?? START_YEAR);
+        render(y);
+        $yearSel.value = String(y);
+      });
+
+      // Inicialización
+      const initial = clampYear(getYearFromHash() ?? START_YEAR);
+      setHashYear(initial);
+      render(initial);
+    })();
+  </script>
+</body>
+</html>
